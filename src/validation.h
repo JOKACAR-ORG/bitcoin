@@ -25,13 +25,12 @@
 #include <script/sigcache.h>
 #include <sync.h>
 #include <txdb.h>
-#include <txmempool.h>
+#include <txmempool.h> // For CTxMemPool::cs
 #include <uint256.h>
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/hasher.h>
 #include <util/result.h>
-#include <util/time.h>
 #include <util/translation.h>
 #include <versionbits.h>
 
@@ -437,8 +436,7 @@ enum DisconnectResult
 class ConnectTrace;
 
 /** @see Chainstate::FlushStateToDisk */
-inline constexpr std::array FlushStateModeNames{"NONE", "IF_NEEDED", "PERIODIC", "ALWAYS"};
-enum class FlushStateMode: uint8_t {
+enum class FlushStateMode {
     NONE,
     IF_NEEDED,
     PERIODIC,
@@ -534,7 +532,7 @@ protected:
     bool m_disabled GUARDED_BY(::cs_main) {false};
 
     //! Cached result of LookupBlockIndex(*m_from_snapshot_blockhash)
-    mutable const CBlockIndex* m_cached_snapshot_base GUARDED_BY(::cs_main){nullptr};
+    const CBlockIndex* m_cached_snapshot_base GUARDED_BY(::cs_main) {nullptr};
 
 public:
     //! Reference to a BlockManager instance which itself is shared across all
@@ -598,7 +596,7 @@ public:
      *
      * nullptr if this chainstate was not created from a snapshot.
      */
-    const CBlockIndex* SnapshotBase() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    const CBlockIndex* SnapshotBase() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /**
      * The set of all CBlockIndex entries that have as much work as our current
@@ -804,7 +802,8 @@ private:
     void UpdateTip(const CBlockIndex* pindexNew)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-    NodeClock::time_point m_next_write{NodeClock::time_point::max()};
+    SteadyClock::time_point m_last_write{};
+    SteadyClock::time_point m_last_flush{};
 
     /**
      * In case of an invalid snapshot, rename the coins leveldb directory so
@@ -936,6 +935,8 @@ private:
     /** Most recent headers presync progress update, for rate-limiting. */
     MockableSteadyClock::time_point m_last_presync_update GUARDED_BY(GetMutex()){};
 
+    std::array<ThresholdConditionCache, VERSIONBITS_NUM_BITS> m_warningcache GUARDED_BY(::cs_main);
+
     //! Return true if a chainstate is considered usable.
     //!
     //! This is false when a background validation chainstate has completed its
@@ -984,7 +985,7 @@ public:
      *
      * By default this only executes fully when using the Regtest chain; see: m_options.check_block_index.
      */
-    void CheckBlockIndex() const;
+    void CheckBlockIndex();
 
     /**
      * Alias for ::cs_main.
@@ -1148,7 +1149,7 @@ public:
     bool IsInitialBlockDownload() const;
 
     /** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip). */
-    double GuessVerificationProgress(const CBlockIndex* pindex) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+    double GuessVerificationProgress(const CBlockIndex* pindex) const;
 
     /**
      * Import blocks from an external file
@@ -1217,7 +1218,6 @@ public:
      * @param[in]  min_pow_checked  True if proof-of-work anti-DoS checks have been done by caller for headers chain
      * @param[out] state This may be set to an Error state if any error occurred processing them
      * @param[out] ppindex If set, the pointer will be set to point to the last new block index object for the given headers
-     * @returns false if AcceptBlockHeader fails on any of the headers, true otherwise (including if headers were already known)
      */
     bool ProcessNewBlockHeaders(std::span<const CBlockHeader> headers, bool min_pow_checked, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
 

@@ -17,14 +17,9 @@
 #include <util/string.h>
 #include <util/thread.h>
 #include <util/translation.h>
-#include <validation.h>
+#include <validation.h> // For g_chainman
 
-#include <chrono>
-#include <memory>
-#include <optional>
-#include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 
 constexpr uint8_t DB_BEST_BLOCK{'B'};

@@ -72,6 +72,9 @@ namespace {
 
 // don't add private key handling cmd's to the history
 const QStringList historyFilter = QStringList()
+    << "importprivkey"
+    << "importmulti"
+    << "sethdseed"
     << "signmessagewithprivkey"
     << "signrawtransactionwithkey"
     << "walletpassphrase"
@@ -89,7 +92,7 @@ public:
     explicit RPCExecutor(interfaces::Node& node) : m_node(node) {}
 
 public Q_SLOTS:
-    void request(const QString &command, const QString& wallet_name);
+    void request(const QString &command, const WalletModel* wallet_model);
 
 Q_SIGNALS:
     void reply(int category, const QString &command);
@@ -166,7 +169,7 @@ public:
  * @param[out]   pstrFilteredOut  Command line, filtered to remove any sensitive data
  */
 
-bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strResult, const std::string &strCommand, const bool fExecute, std::string * const pstrFilteredOut, const QString& wallet_name)
+bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strResult, const std::string &strCommand, const bool fExecute, std::string * const pstrFilteredOut, const WalletModel* wallet_model)
 {
     std::vector< std::vector<std::string> > stack;
     stack.emplace_back();
@@ -325,10 +328,12 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
                             UniValue params = RPCConvertValues(stack.back()[0], std::vector<std::string>(stack.back().begin() + 1, stack.back().end()));
                             std::string method = stack.back()[0];
                             std::string uri;
-                            if (!wallet_name.isEmpty()) {
-                                QByteArray encodedName = QUrl::toPercentEncoding(wallet_name);
+#ifdef ENABLE_WALLET
+                            if (wallet_model) {
+                                QByteArray encodedName = QUrl::toPercentEncoding(wallet_model->getWalletName());
                                 uri = "/wallet/"+std::string(encodedName.constData(), encodedName.length());
                             }
+#endif
                             assert(node);
                             lastResult = node->executeRpc(method, params, uri);
                         }
@@ -406,7 +411,7 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
     }
 }
 
-void RPCExecutor::request(const QString &command, const QString& wallet_name)
+void RPCExecutor::request(const QString &command, const WalletModel* wallet_model)
 {
     try
     {
@@ -436,7 +441,7 @@ void RPCExecutor::request(const QString &command, const QString& wallet_name)
                 "   example:    getblock(getblockhash(0),1)[tx][0]\n\n")));
             return;
         }
-        if (!RPCConsole::RPCExecuteCommandLine(m_node, result, executableCommand, nullptr, wallet_name)) {
+        if (!RPCConsole::RPCExecuteCommandLine(m_node, result, executableCommand, nullptr, wallet_model)) {
             Q_EMIT reply(RPCConsole::CMD_ERROR, QString("Parse error: unbalanced ' or \""));
             return;
         }
@@ -1055,10 +1060,10 @@ void RPCConsole::on_lineEdit_returnPressed()
 
     ui->lineEdit->clear();
 
-    QString in_use_wallet_name;
+    WalletModel* wallet_model{nullptr};
 #ifdef ENABLE_WALLET
-    WalletModel* wallet_model = ui->WalletSelector->currentData().value<WalletModel*>();
-    in_use_wallet_name = wallet_model ? wallet_model->getWalletName() : QString();
+    wallet_model = ui->WalletSelector->currentData().value<WalletModel*>();
+
     if (m_last_wallet_model != wallet_model) {
         if (wallet_model) {
             message(CMD_REQUEST, tr("Executing command using \"%1\" wallet").arg(wallet_model->getWalletName()));
@@ -1074,8 +1079,8 @@ void RPCConsole::on_lineEdit_returnPressed()
     message(CMD_REPLY, tr("Executing…"));
     m_is_executing = true;
 
-    QMetaObject::invokeMethod(m_executor, [this, cmd, in_use_wallet_name] {
-        m_executor->request(cmd, in_use_wallet_name);
+    QMetaObject::invokeMethod(m_executor, [this, cmd, wallet_model] {
+        m_executor->request(cmd, wallet_model);
     });
 
     cmd = QString::fromStdString(strFilteredCmd);

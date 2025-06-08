@@ -38,7 +38,6 @@
 
 #include <cstddef>
 #include <map>
-#include <optional>
 #include <unordered_map>
 
 namespace kernel {
@@ -625,11 +624,11 @@ void BlockManager::CleanupBlockRevFiles() const
         const std::string path = fs::PathToString(it->path().filename());
         if (fs::is_regular_file(*it) &&
             path.length() == 12 &&
-            path.ends_with(".dat"))
+            path.substr(8,4) == ".dat")
         {
-            if (path.starts_with("blk")) {
+            if (path.substr(0, 3) == "blk") {
                 mapBlockFiles[path.substr(3, 5)] = it->path();
-            } else if (path.starts_with("rev")) {
+            } else if (path.substr(0, 3) == "rev") {
                 remove(it->path());
             }
         }
@@ -990,7 +989,7 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
     return true;
 }
 
-bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
+bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos) const
 {
     block.SetNull();
 
@@ -1008,10 +1007,8 @@ bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::o
         return false;
     }
 
-    const auto block_hash{block.GetHash()};
-
     // Check the header
-    if (!CheckProofOfWork(block_hash, block.nBits, GetConsensus())) {
+    if (!CheckProofOfWork(block.GetHash(), block.nBits, GetConsensus())) {
         LogError("Errors in block header at %s while reading block", pos.ToString());
         return false;
     }
@@ -1022,19 +1019,21 @@ bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::o
         return false;
     }
 
-    if (expected_hash && block_hash != *expected_hash) {
-        LogError("GetHash() doesn't match index at %s while reading block (%s != %s)",
-                 pos.ToString(), block_hash.ToString(), expected_hash->ToString());
-        return false;
-    }
-
     return true;
 }
 
 bool BlockManager::ReadBlock(CBlock& block, const CBlockIndex& index) const
 {
     const FlatFilePos block_pos{WITH_LOCK(cs_main, return index.GetBlockPos())};
-    return ReadBlock(block, block_pos, index.GetBlockHash());
+
+    if (!ReadBlock(block, block_pos)) {
+        return false;
+    }
+    if (block.GetHash() != index.GetBlockHash()) {
+        LogError("GetHash() doesn't match index for %s at %s while reading block", index.ToString(), block_pos.ToString());
+        return false;
+    }
+    return true;
 }
 
 bool BlockManager::ReadRawBlock(std::vector<uint8_t>& block, const FlatFilePos& pos) const

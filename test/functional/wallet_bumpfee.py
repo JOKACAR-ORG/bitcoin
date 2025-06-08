@@ -50,6 +50,9 @@ def get_change_address(tx, node):
     return [address for address in txout_addresses if node.getaddressinfo(address)["ischange"]]
 
 class BumpFeeTest(BitcoinTestFramework):
+    def add_options(self, parser):
+        self.add_wallet_options(parser)
+
     def set_test_params(self):
         self.num_nodes = 2
         self.setup_clean_chain = True
@@ -594,7 +597,10 @@ def test_watchonly_psbt(self, peer_node, rbf_node, dest_address):
         "internal": True,
         "keypool": False
     }]
-    result = signer.importdescriptors(reqs)
+    if self.options.descriptors:
+        result = signer.importdescriptors(reqs)
+    else:
+        result = signer.importmulti(reqs)
     assert_equal(result, [{'success': True}, {'success': True}])
 
     # Create another wallet with just the public keys, which creates PSBTs
@@ -619,7 +625,10 @@ def test_watchonly_psbt(self, peer_node, rbf_node, dest_address):
         "watchonly": True,
         "active": True,
     }]
-    result = watcher.importdescriptors(reqs)
+    if self.options.descriptors:
+        result = watcher.importdescriptors(reqs)
+    else:
+        result = watcher.importmulti(reqs)
     assert_equal(result, [{'success': True}, {'success': True}])
 
     funding_address1 = watcher.getnewaddress(address_type='bech32')

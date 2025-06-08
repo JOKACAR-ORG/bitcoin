@@ -54,6 +54,13 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOUIC_SEARCH_PATHS forms)
 
+# TODO: The file(GLOB ...) command should be replaced with an explicit
+# file list. Such a change must be synced with the corresponding change
+# to https://github.com/bitcoin-core/bitcoin-maintainer-tools/blob/main/update-translations.py
+file(GLOB ts_files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} locale/*.ts)
+set_source_files_properties(${ts_files} PROPERTIES OUTPUT_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/locale)
+qt6_add_translation(qm_files ${ts_files})
+
 configure_file(bitcoin_locale.qrc bitcoin_locale.qrc USE_SOURCE_PERMISSIONS COPYONLY)
 
 # The bitcoinqt sources have to include headers in
@@ -243,20 +250,12 @@ if(qt_lib_type STREQUAL "STATIC_LIBRARY")
   )
 endif()
 
-file(GLOB ts_files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} locale/*.ts)
-set_source_files_properties(${ts_files} PROPERTIES OUTPUT_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/locale)
-qt6_add_lrelease(bitcoinqt
-  TS_FILES ${ts_files}
-  OPTIONS -silent
-)
-
 add_executable(bitcoin-qt
   main.cpp
   ../init/bitcoin-qt.cpp
 )
 
 add_windows_resources(bitcoin-qt res/bitcoin-qt-res.rc)
-add_windows_application_manifest(bitcoin-qt)
 
 target_link_libraries(bitcoin-qt
   core_interface

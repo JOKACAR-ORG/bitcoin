@@ -165,7 +165,7 @@ void CheckQueueTest::Correct_Queue_range(std::vector<size_t> range)
     for (const size_t i : range) {
         size_t total = i;
         FakeCheckCheckCompletion::n_calls = 0;
-        CCheckQueueControl<FakeCheckCheckCompletion> control(*small_queue);
+        CCheckQueueControl<FakeCheckCheckCompletion> control(small_queue.get());
         while (total) {
             vChecks.clear();
             vChecks.resize(std::min<size_t>(total, m_rng.randrange(10)));
@@ -220,7 +220,7 @@ BOOST_AUTO_TEST_CASE(test_CheckQueue_Catches_Failure)
 {
     auto fixed_queue = std::make_unique<Fixed_Queue>(QUEUE_BATCH_SIZE, SCRIPT_CHECK_THREADS);
     for (size_t i = 0; i < 1001; ++i) {
-        CCheckQueueControl<FixedCheck> control(*fixed_queue);
+        CCheckQueueControl<FixedCheck> control(fixed_queue.get());
         size_t remaining = i;
         while (remaining) {
             size_t r = m_rng.randrange(10);
@@ -246,7 +246,7 @@ BOOST_AUTO_TEST_CASE(test_CheckQueue_Recovers_From_Failure)
     auto fail_queue = std::make_unique<Fixed_Queue>(QUEUE_BATCH_SIZE, SCRIPT_CHECK_THREADS);
     for (auto times = 0; times < 10; ++times) {
         for (const bool end_fails : {true, false}) {
-            CCheckQueueControl<FixedCheck> control(*fail_queue);
+            CCheckQueueControl<FixedCheck> control(fail_queue.get());
             {
                 std::vector<FixedCheck> vChecks;
                 vChecks.resize(100, FixedCheck(std::nullopt));
@@ -268,7 +268,7 @@ BOOST_AUTO_TEST_CASE(test_CheckQueue_UniqueCheck)
     size_t COUNT = 100000;
     size_t total = COUNT;
     {
-        CCheckQueueControl<UniqueCheck> control(*queue);
+        CCheckQueueControl<UniqueCheck> control(queue.get());
         while (total) {
             size_t r = m_rng.randrange(10);
             std::vector<UniqueCheck> vChecks;
@@ -300,7 +300,7 @@ BOOST_AUTO_TEST_CASE(test_CheckQueue_Memory)
     for (size_t i = 0; i < 1000; ++i) {
         size_t total = i;
         {
-            CCheckQueueControl<MemoryCheck> control(*queue);
+            CCheckQueueControl<MemoryCheck> control(queue.get());
             while (total) {
                 size_t r = m_rng.randrange(10);
                 std::vector<MemoryCheck> vChecks;
@@ -324,7 +324,7 @@ BOOST_AUTO_TEST_CASE(test_CheckQueue_FrozenCleanup)
     auto queue = std::make_unique<FrozenCleanup_Queue>(QUEUE_BATCH_SIZE, SCRIPT_CHECK_THREADS);
     bool fails = false;
     std::thread t0([&]() {
-        CCheckQueueControl<FrozenCleanupCheck> control(*queue);
+        CCheckQueueControl<FrozenCleanupCheck> control(queue.get());
         std::vector<FrozenCleanupCheck> vChecks(1);
         control.Add(std::move(vChecks));
         auto result = control.Complete(); // Hangs here
@@ -364,7 +364,7 @@ BOOST_AUTO_TEST_CASE(test_CheckQueueControl_Locks)
         for (size_t i = 0; i < 3; ++i) {
             tg.emplace_back(
                     [&]{
-                    CCheckQueueControl<FakeCheck> control(*queue);
+                    CCheckQueueControl<FakeCheck> control(queue.get());
                     // While sleeping, no other thread should execute to this point
                     auto observed = ++nThreads;
                     UninterruptibleSleep(std::chrono::milliseconds{10});
@@ -387,7 +387,7 @@ BOOST_AUTO_TEST_CASE(test_CheckQueueControl_Locks)
         {
             std::unique_lock<std::mutex> l(m);
             tg.emplace_back([&]{
-                    CCheckQueueControl<FakeCheck> control(*queue);
+                    CCheckQueueControl<FakeCheck> control(queue.get());
                     std::unique_lock<std::mutex> ll(m);
                     has_lock = true;
                     cv.notify_one();

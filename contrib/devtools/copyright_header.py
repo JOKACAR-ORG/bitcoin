@@ -22,6 +22,7 @@ EXCLUDE = [
     'src/test/fuzz/FuzzedDataProvider.h',
     'src/tinyformat.h',
     'src/bench/nanobench.h',
+    'test/functional/test_framework/bignum.py',
     # python init:
     '*__init__.py',
 ]
@@ -93,6 +94,7 @@ EXPECTED_HOLDER_NAMES = [
     r"Satoshi Nakamoto",
     r"The Bitcoin Core developers",
     r"BitPay Inc\.",
+    r"University of Illinois at Urbana-Champaign\.",
     r"Pieter Wuille",
     r"Wladimir J\. van der Laan",
     r"Jeff Garzik",

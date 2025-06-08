@@ -11,9 +11,16 @@
     "qt",
     "tests",
     "wallet",
+    "berkeleydb",
     "zeromq"
   ],
   "features": {
+    "berkeleydb": {
+      "description": "Enable Berkeley DB wallet support",
+      "dependencies": [
+        "berkeleydb"
+      ]
+    },
     "qt": {
       "description": "Build GUI, Qt 6",
       "dependencies": [

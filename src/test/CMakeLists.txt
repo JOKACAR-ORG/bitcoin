@@ -25,7 +25,6 @@ add_executable(test_bitcoin
   blockmanager_tests.cpp
   bloom_tests.cpp
   bswap_tests.cpp
-  chainstate_write_tests.cpp
   checkqueue_tests.cpp
   cluster_linearize_tests.cpp
   coins_tests.cpp
@@ -141,8 +140,6 @@ target_json_data_sources(test_bitcoin
 target_raw_data_sources(test_bitcoin NAMESPACE test::data
   data/asmap.raw
 )
-
-add_windows_application_manifest(test_bitcoin)
 
 target_link_libraries(test_bitcoin
   core_interface

@@ -8,8 +8,6 @@
 #include <sync.h>
 #include <wallet/db.h>
 
-#include <semaphore>
-
 struct bilingual_str;
 
 struct sqlite3_stmt;
@@ -87,6 +85,9 @@ public:
 
     void SetExecHandler(std::unique_ptr<SQliteExecHandler>&& handler) { m_exec_handler = std::move(handler); }
 
+    /* No-op. See comment on SQLiteDatabase::Flush */
+    void Flush() override {}
+
     void Close() override;
 
     std::unique_ptr<DatabaseCursor> GetNewCursor() override;
@@ -129,7 +130,7 @@ public:
 
     // Batches must acquire this semaphore on writing, and release when done writing.
     // This ensures that only one batch is modifying the database at a time.
-    std::binary_semaphore m_write_semaphore;
+    CSemaphore m_write_semaphore;
 
     bool Verify(bilingual_str& error);
 
@@ -139,6 +140,10 @@ public:
     /** Close the database */
     void Close() override;
 
+    /* These functions are unused */
+    void AddRef() override { assert(false); }
+    void RemoveRef() override { assert(false); }
+
     /** Rewrite the entire database on disk */
     bool Rewrite(const char* skip = nullptr) override;
 
@@ -146,11 +151,25 @@ public:
      */
     bool Backup(const std::string& dest) const override;
 
+    /** No-ops
+     *
+     * SQLite always flushes everything to the database file after each transaction
+     * (each Read/Write/Erase that we do is its own transaction unless we called
+     * TxnBegin) so there is no need to have Flush or Periodic Flush.
+     *
+     * There is no DB env to reload, so ReloadDbEnv has nothing to do
+     */
+    void Flush() override {}
+    bool PeriodicFlush() override { return false; }
+    void ReloadDbEnv() override {}
+
+    void IncrementUpdateCounter() override { ++nUpdateCounter; }
+
     std::string Filename() override { return m_file_path; }
     std::string Format() override { return "sqlite"; }
 
     /** Make a SQLiteBatch connected to this database */
-    std::unique_ptr<DatabaseBatch> MakeBatch() override;
+    std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override;
 
     /** Return true if there is an on-going txn in this connection */
     bool HasActiveTxn();
