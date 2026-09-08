@@ -7,12 +7,13 @@
 
 #include <crypto/sha3.h>
 #include <crypto/common.h>
+#include <span.h>
 
 #include <algorithm>
-#include <array>
+#include <array> // For std::begin and std::end.
 #include <bit>
-#include <cstdint>
-#include <span>
+
+#include <stdint.h>
 
 void KeccakF(uint64_t (&st)[25])
 {

@@ -4,7 +4,6 @@
  * file COPYING or https://www.opensource.org/licenses/mit-license.php.*
  ***********************************************************************/
 #include <stdio.h>
-#include <stdlib.h>
 
 #include "secp256k1.c"
 #include "../include/secp256k1.h"
@@ -288,7 +287,7 @@ int main(int argc, char **argv) {
            || have_flag(argc, argv, "--help")
            || have_flag(argc, argv, "help")) {
             help(argv);
-            return EXIT_SUCCESS;
+            return 0;
         } else if(have_flag(argc, argv, "pippenger_wnaf")) {
             printf("Using pippenger_wnaf:\n");
             data.ecmult_multi = secp256k1_ecmult_pippenger_batch_single;
@@ -300,7 +299,7 @@ int main(int argc, char **argv) {
         } else {
             fprintf(stderr, "%s: unrecognized argument '%s'.\n\n", argv[0], argv[1]);
             help(argv);
-            return EXIT_FAILURE;
+            return 1;
         }
     }
 
@@ -364,5 +363,5 @@ int main(int argc, char **argv) {
     free(data.output);
     free(data.expected_output);
 
-    return EXIT_SUCCESS;
+    return(0);
 }

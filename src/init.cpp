@@ -1,5 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-present The Bitcoin Core developers
+// Copyright (c) 2009-2022 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -93,7 +93,6 @@
 #include <walletinitinterface.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -105,6 +104,7 @@
 #include <vector>
 
 #ifndef WIN32
+#include <cerrno>
 #include <signal.h>
 #include <sys/stat.h>
 #endif
@@ -298,6 +298,9 @@ void Shutdown(NodeContext& node)
     StopREST();
     StopRPC();
     StopHTTPServer();
+    for (const auto& client : node.chain_clients) {
+        client->flush();
+    }
     StopMapPort();
 
     // Because these depend on each-other, we make sure that neither can be
@@ -561,6 +564,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-peertimeout=<n>", strprintf("Specify a p2p connection timeout delay in seconds. After connecting to a peer, wait this amount of time before considering disconnection based on inactivity (minimum: 1, default: %d)", DEFAULT_PEER_CONNECT_TIMEOUT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-torcontrol=<ip>:<port>", strprintf("Tor control host and port to use if onion listening enabled (default: %s). If no port is specified, the default port of %i will be used.", DEFAULT_TOR_CONTROL, DEFAULT_TOR_CONTROL_PORT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-torpassword=<pass>", "Tor control port password (default: empty)", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::CONNECTION);
+    // UPnP support was dropped. We keep `-upnp` as a hidden arg to display a more user friendly error when set. TODO: remove (here and below) for 30.0. NOTE: removing this option may prevent the GUI from starting, see https://github.com/bitcoin-core/gui/issues/843.
+    argsman.AddArg("-upnp", "", ArgsManager::ALLOW_ANY, OptionsCategory::HIDDEN);
     argsman.AddArg("-natpmp", strprintf("Use PCP or NAT-PMP to map the listening port (default: %u)", DEFAULT_NATPMP), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-whitebind=<[permissions@]addr>", "Bind to the given address and add permission flags to the peers connecting to it. "
         "Use [host]:port notation for IPv6. Allowed permissions: " + Join(NET_PERMISSIONS_DOC, ", ") + ". "
@@ -650,7 +655,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-blockversion=<n>", "Override block version to test forking scenarios", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
 
     argsman.AddArg("-rest", strprintf("Accept public REST requests (default: %u)", DEFAULT_REST_ENABLE), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
-    argsman.AddArg("-rpcallowip=<ip>", "Allow JSON-RPC connections from specified source. Valid values for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). RFC4193 is allowed only if -cjdnsreachable=0. This option can be specified multiple times", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
+    argsman.AddArg("-rpcallowip=<ip>", "Allow JSON-RPC connections from specified source. Valid values for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). This option can be specified multiple times", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcauth=<userpw>", "Username and HMAC-SHA-256 hashed password for JSON-RPC connections. The field <userpw> comes in the format: <USERNAME>:<SALT>$<HASH>. A canonical python script is included in share/rpcauth. The client then connects normally using the rpcuser=<USERNAME>/rpcpassword=<PASSWORD> pair of arguments. This option can be specified multiple times", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::RPC);
     argsman.AddArg("-rpcbind=<addr>[:port]", "Bind to given address to listen for JSON-RPC connections. Do not expose the RPC server to untrusted networks such as the public internet! This option is ignored unless -rpcallowip is also passed. Port is optional and overrides -rpcport. Use [host]:port notation for IPv6. This option can be specified multiple times (default: 127.0.0.1 and ::1 i.e., localhost)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::RPC);
     argsman.AddArg("-rpcdoccheck", strprintf("Throw a non-fatal error at runtime if the documentation for an RPC is incorrect (default: %u)", DEFAULT_RPC_DOC_CHECK), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::RPC);
@@ -788,6 +793,32 @@ void InitParameterInteraction(ArgsManager& args)
         if (!clearnet_reachable && args.SoftSetBoolArg("-dnsseed", false)) {
             LogInfo("parameter interaction: -onlynet excludes IPv4 and IPv6 -> setting -dnsseed=0\n");
         }
+    }
+
+    // If settings.json contains a "upnp" option, migrate it to use "natpmp" instead
+    bool settings_changed{false}; // Whether settings.json file needs to be rewritten
+    args.LockSettings([&](common::Settings& settings) {
+        if (auto* upnp{common::FindKey(settings.rw_settings, "upnp")}) {
+            if (common::FindKey(settings.rw_settings, "natpmp") == nullptr) {
+                LogWarning(R"(Adding "natpmp": %s to settings.json to replace obsolete "upnp" setting)", upnp->write());
+                settings.rw_settings["natpmp"] = *upnp;
+            }
+            LogWarning(R"(Removing obsolete "upnp" setting from settings.json)");
+            settings.rw_settings.erase("upnp");
+            settings_changed = true;
+        }
+    });
+    if (settings_changed) args.WriteSettingsFile();
+
+    // We dropped UPnP support but kept the arg as hidden for now to display a friendlier error to user who has the
+    // option in their config, and migrate the setting to -natpmp.
+    if (const auto arg{args.GetBoolArg("-upnp")}) {
+        std::string message;
+        if (args.SoftSetBoolArg("-natpmp", *arg)) {
+            message = strprintf(" Substituting '-natpmp=%s'.", *arg);
+        }
+        LogWarning("Option '-upnp=%s' is given but UPnP support was dropped in version 29.0.%s",
+                *arg, message);
     }
 }
 
@@ -1151,8 +1182,8 @@ bool CheckHostPortOptions(const ArgsManager& args) {
         "-rpcport",
     }) {
         if (const auto port{args.GetArg(port_option)}) {
-            const auto n{ToIntegral<uint16_t>(*port)};
-            if (!n || *n == 0) {
+            uint16_t n;
+            if (!ParseUInt16(*port, &n) || n == 0) {
                 return InitError(InvalidPortErrMsg(port_option, *port));
             }
         }
@@ -1392,32 +1423,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // Check port numbers
     if (!CheckHostPortOptions(args)) return false;
 
-    // Configure reachable networks before we start the RPC server.
-    // This is necessary for -rpcallowip to distinguish CJDNS from other RFC4193
-    const auto onlynets = args.GetArgs("-onlynet");
-    if (!onlynets.empty()) {
-        g_reachable_nets.RemoveAll();
-        for (const std::string& snet : onlynets) {
-            enum Network net = ParseNetwork(snet);
-            if (net == NET_UNROUTABLE)
-                return InitError(strprintf(_("Unknown network specified in -onlynet: '%s'"), snet));
-            g_reachable_nets.Add(net);
-        }
-    }
-
-    if (!args.IsArgSet("-cjdnsreachable")) {
-        if (!onlynets.empty() && g_reachable_nets.Contains(NET_CJDNS)) {
-            return InitError(
-                _("Outbound connections restricted to CJDNS (-onlynet=cjdns) but "
-                  "-cjdnsreachable is not provided"));
-        }
-        g_reachable_nets.Remove(NET_CJDNS);
-    }
-    // Now g_reachable_nets.Contains(NET_CJDNS) is true if:
-    // 1. -cjdnsreachable is given and
-    // 2.1. -onlynet is not given or
-    // 2.2. -onlynet=cjdns is given
-
     /* Start the RPC server already.  It will be started in "warmup" mode
      * and not really process calls already (but it will signify connections
      * that the server is there and will be ready later).  Warmup mode will
@@ -1529,6 +1534,30 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         return InitError(strprintf(_("Total length of network version string (%i) exceeds maximum length (%i). Reduce the number or size of uacomments."),
             strSubVersion.size(), MAX_SUBVERSION_LENGTH));
     }
+
+    const auto onlynets = args.GetArgs("-onlynet");
+    if (!onlynets.empty()) {
+        g_reachable_nets.RemoveAll();
+        for (const std::string& snet : onlynets) {
+            enum Network net = ParseNetwork(snet);
+            if (net == NET_UNROUTABLE)
+                return InitError(strprintf(_("Unknown network specified in -onlynet: '%s'"), snet));
+            g_reachable_nets.Add(net);
+        }
+    }
+
+    if (!args.IsArgSet("-cjdnsreachable")) {
+        if (!onlynets.empty() && g_reachable_nets.Contains(NET_CJDNS)) {
+            return InitError(
+                _("Outbound connections restricted to CJDNS (-onlynet=cjdns) but "
+                  "-cjdnsreachable is not provided"));
+        }
+        g_reachable_nets.Remove(NET_CJDNS);
+    }
+    // Now g_reachable_nets.Contains(NET_CJDNS) is true if:
+    // 1. -cjdnsreachable is given and
+    // 2.1. -onlynet is not given or
+    // 2.2. -onlynet=cjdns is given
 
     // Requesting DNS seeds entails connecting to IPv4/IPv6, which -onlynet options may prohibit:
     // If -dnsseed=1 is explicitly specified, abort. If it's left unspecified by the user, we skip
@@ -1789,10 +1818,10 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 #if HAVE_SYSTEM
     const std::string block_notify = args.GetArg("-blocknotify", "");
     if (!block_notify.empty()) {
-        uiInterface.NotifyBlockTip_connect([block_notify](SynchronizationState sync_state, const CBlockIndex& block, double /* verification_progress */) {
-            if (sync_state != SynchronizationState::POST_INIT) return;
+        uiInterface.NotifyBlockTip_connect([block_notify](SynchronizationState sync_state, const CBlockIndex* pBlockIndex) {
+            if (sync_state != SynchronizationState::POST_INIT || !pBlockIndex) return;
             std::string command = block_notify;
-            ReplaceAll(command, "%s", block.GetBlockHash().GetHex());
+            ReplaceAll(command, "%s", pBlockIndex->GetBlockHash().GetHex());
             std::thread t(runCommand, command);
             t.detach(); // thread runs free
         });
@@ -1818,7 +1847,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
         // Start indexes initial sync
         if (!StartIndexBackgroundSync(node)) {
-            bilingual_str err_str = _("Failed to start indexes, shutting down…");
+            bilingual_str err_str = _("Failed to start indexes, shutting down..");
             chainman.GetNotifications().fatalError(err_str);
             return;
         }

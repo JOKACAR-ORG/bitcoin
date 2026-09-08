@@ -35,9 +35,8 @@ using node::NodeContext;
 
 static RPCHelpMan setmocktime()
 {
-    return RPCHelpMan{
-        "setmocktime",
-        "Set the local time to given timestamp (-regtest only)\n",
+    return RPCHelpMan{"setmocktime",
+        "\nSet the local time to given timestamp (-regtest only)\n",
         {
             {"timestamp", RPCArg::Type::NUM, RPCArg::Optional::NO, UNIX_EPOCH_TIME + "\n"
              "Pass 0 to go back to using the system time."},
@@ -76,9 +75,8 @@ static RPCHelpMan setmocktime()
 
 static RPCHelpMan mockscheduler()
 {
-    return RPCHelpMan{
-        "mockscheduler",
-        "Bump the scheduler into the future (-regtest only)\n",
+    return RPCHelpMan{"mockscheduler",
+        "\nBump the scheduler into the future (-regtest only)\n",
         {
             {"delta_time", RPCArg::Type::NUM, RPCArg::Optional::NO, "Number of seconds to forward the scheduler into the future." },
         },
@@ -273,9 +271,8 @@ static RPCHelpMan logging()
 
 static RPCHelpMan echo(const std::string& name)
 {
-    return RPCHelpMan{
-        name,
-        "Simply echo back the input arguments. This command is for testing.\n"
+    return RPCHelpMan{name,
+                "\nSimply echo back the input arguments. This command is for testing.\n"
                 "\nIt will return an internal bug report when arg9='trigger_internal_bug' is passed.\n"
                 "\nThe difference between echo and echojson is that echojson has argument conversion enabled in the client-side table in "
                 "bitcoin-cli and the GUI. There is no server-side difference.",
@@ -311,7 +308,7 @@ static RPCHelpMan echoipc()
 {
     return RPCHelpMan{
         "echoipc",
-        "Echo back the input argument, passing it through a spawned process in a multiprocess build.\n"
+        "\nEcho back the input argument, passing it through a spawned process in a multiprocess build.\n"
         "This command is for testing.\n",
         {{"arg", RPCArg::Type::STR, RPCArg::Optional::NO, "The string to echo",}},
         RPCResult{RPCResult::Type::STR, "echo", "The echoed string."},
@@ -359,9 +356,8 @@ static UniValue SummaryToJSON(const IndexSummary&& summary, std::string index_na
 
 static RPCHelpMan getindexinfo()
 {
-    return RPCHelpMan{
-        "getindexinfo",
-        "Returns the status of one or all available indices currently running in the node.\n",
+    return RPCHelpMan{"getindexinfo",
+                "\nReturns the status of one or all available indices currently running in the node.\n",
                 {
                     {"index_name", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Filter results for an index with a specific name."},
                 },

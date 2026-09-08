@@ -37,9 +37,16 @@
 #include <util/translation.h>
 #include <util/vector.h>
 
+#ifdef WIN32
+#include <string.h>
+#endif
+
+#if HAVE_DECL_GETIFADDRS && HAVE_DECL_FREEIFADDRS
+#include <ifaddrs.h>
+#endif
+
 #include <algorithm>
 #include <array>
-#include <cstring>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -360,7 +367,7 @@ CNode* CConnman::FindNode(const CService& addr)
 
 bool CConnman::AlreadyConnectedToAddress(const CAddress& addr)
 {
-    return FindNode(static_cast<CNetAddr>(addr));
+    return FindNode(static_cast<CNetAddr>(addr)) || FindNode(addr.ToStringAddrPort());
 }
 
 bool CConnman::CheckIncomingNonce(uint64_t nonce)
@@ -1886,7 +1893,7 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
     if (max_connections != std::nullopt && existing_connections >= max_connections) return false;
 
     // Max total outbound connections already exist
-    CountingSemaphoreGrant<> grant(*semOutbound, true);
+    CSemaphoreGrant grant(*semOutbound, true);
     if (!grant) return false;
 
     OpenNetworkConnection(CAddress(), false, std::move(grant), address.c_str(), conn_type, /*use_v2transport=*/use_v2transport);
@@ -2402,7 +2409,7 @@ void CConnman::ProcessAddrFetch()
     // peer doesn't support it or immediately disconnects us for another reason.
     const bool use_v2transport(GetLocalServices() & NODE_P2P_V2);
     CAddress addr;
-    CountingSemaphoreGrant<> grant(*semOutbound, /*fTry=*/true);
+    CSemaphoreGrant grant(*semOutbound, /*fTry=*/true);
     if (grant) {
         OpenNetworkConnection(addr, false, std::move(grant), strDest.c_str(), ConnectionType::ADDR_FETCH, use_v2transport);
     }
@@ -2576,7 +2583,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
 
         PerformReconnections();
 
-        CountingSemaphoreGrant<> grant(*semOutbound);
+        CSemaphoreGrant grant(*semOutbound);
         if (interruptNet)
             return;
 
@@ -2954,7 +2961,7 @@ void CConnman::ThreadOpenAddedConnections()
     AssertLockNotHeld(m_reconnections_mutex);
     while (true)
     {
-        CountingSemaphoreGrant<> grant(*semAddnode);
+        CSemaphoreGrant grant(*semAddnode);
         std::vector<AddedNodeInfo> vInfo = GetAddedNodeInfo(/*include_connected=*/false);
         bool tried = false;
         for (const AddedNodeInfo& info : vInfo) {
@@ -2967,7 +2974,7 @@ void CConnman::ThreadOpenAddedConnections()
             CAddress addr(CService(), NODE_NONE);
             OpenNetworkConnection(addr, false, std::move(grant), info.m_params.m_added_node.c_str(), ConnectionType::MANUAL, info.m_params.m_use_v2transport);
             if (!interruptNet.sleep_for(std::chrono::milliseconds(500))) return;
-            grant = CountingSemaphoreGrant<>(*semAddnode, /*fTry=*/true);
+            grant = CSemaphoreGrant(*semAddnode, /*fTry=*/true);
         }
         // See if any reconnections are desired.
         PerformReconnections();
@@ -2978,7 +2985,7 @@ void CConnman::ThreadOpenAddedConnections()
 }
 
 // if successful, this moves the passed grant to the constructed node
-void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFailure, CountingSemaphoreGrant<>&& grant_outbound, const char *pszDest, ConnectionType conn_type, bool use_v2transport)
+void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFailure, CSemaphoreGrant&& grant_outbound, const char *pszDest, ConnectionType conn_type, bool use_v2transport)
 {
     AssertLockNotHeld(m_unused_i2p_sessions_mutex);
     assert(conn_type != ConnectionType::INBOUND);
@@ -3329,11 +3336,11 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
 
     if (semOutbound == nullptr) {
         // initialize semaphore
-        semOutbound = std::make_unique<std::counting_semaphore<>>(std::min(m_max_automatic_outbound, m_max_automatic_connections));
+        semOutbound = std::make_unique<CSemaphore>(std::min(m_max_automatic_outbound, m_max_automatic_connections));
     }
     if (semAddnode == nullptr) {
         // initialize semaphore
-        semAddnode = std::make_unique<std::counting_semaphore<>>(m_max_addnode);
+        semAddnode = std::make_unique<CSemaphore>(m_max_addnode);
     }
 
     //
@@ -3421,13 +3428,13 @@ void CConnman::Interrupt()
 
     if (semOutbound) {
         for (int i=0; i<m_max_automatic_outbound; i++) {
-            semOutbound->release();
+            semOutbound->post();
         }
     }
 
     if (semAddnode) {
         for (int i=0; i<m_max_addnode; i++) {
-            semAddnode->release();
+            semAddnode->post();
         }
     }
 }

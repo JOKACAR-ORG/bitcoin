@@ -398,19 +398,15 @@ void BitcoinGUI::createActions()
         connect(m_open_wallet_menu, &QMenu::aboutToShow, [this] {
             m_open_wallet_menu->clear();
             for (const auto& [path, info] : m_wallet_controller->listWalletDir()) {
-                const auto& [loaded, format] = info;
+                const auto& [loaded, _] = info;
                 QString name = GUIUtil::WalletDisplayName(path);
                 // An single ampersand in the menu item's text sets a shortcut for this item.
                 // Single & are shown when && is in the string. So replace & with &&.
                 name.replace(QChar('&'), QString("&&"));
-                bool is_legacy = format == "bdb";
-                if (is_legacy) {
-                    name += " (needs migration)";
-                }
                 QAction* action = m_open_wallet_menu->addAction(name);
 
-                if (loaded || is_legacy) {
-                    // This wallet is already loaded or it is a legacy wallet
+                if (loaded) {
+                    // This wallet is already loaded
                     action->setEnabled(false);
                     continue;
                 }

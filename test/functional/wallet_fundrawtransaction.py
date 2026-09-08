@@ -40,6 +40,9 @@ def get_unspent(listunspent, amount):
     raise AssertionError('Could not find unspent with amount={}'.format(amount))
 
 class RawTransactionsTest(BitcoinTestFramework):
+    def add_options(self, parser):
+        self.add_wallet_options(parser)
+
     def set_test_params(self):
         self.num_nodes = 4
         self.extra_args = [[
@@ -190,9 +193,9 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.nodes[3].createwallet(wallet_name="wwatch", disable_private_keys=True)
         wwatch = self.nodes[3].get_wallet_rpc('wwatch')
         watchonly_address = self.nodes[0].getnewaddress()
+        watchonly_pubkey = self.nodes[0].getaddressinfo(watchonly_address)["pubkey"]
         self.watchonly_amount = Decimal(200)
-        import_res = wwatch.importdescriptors([{"desc": self.nodes[0].getaddressinfo(watchonly_address)["desc"], "timestamp": "now"}])
-        assert_equal(import_res[0]["success"], True)
+        wwatch.importpubkey(watchonly_pubkey, "", True)
         self.watchonly_utxo = self.create_outpoints(self.nodes[0], outputs=[{watchonly_address: self.watchonly_amount}])[0]
 
         # Lock UTXO so nodes[0] doesn't accidentally spend it
@@ -565,18 +568,18 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.nodes[2].createwallet(wallet_name='wmulti', disable_private_keys=True)
         wmulti = self.nodes[2].get_wallet_rpc('wmulti')
         w2 = self.nodes[2].get_wallet_rpc(self.default_wallet_name)
-        mSigObj = self.nodes[2].createmultisig(
+        mSigObj = wmulti.addmultisigaddress(
             2,
             [
                 addr1Obj['pubkey'],
                 addr2Obj['pubkey'],
             ]
-        )
-        import_res = wmulti.importdescriptors([{"desc": mSigObj["descriptor"], "timestamp": "now"}])
-        assert_equal(import_res[0]["success"], True)
+        )['address']
+        if not self.options.descriptors:
+            wmulti.importaddress(mSigObj)
 
         # Send 1.2 BTC to msig addr.
-        self.nodes[0].sendtoaddress(mSigObj["address"], 1.2)
+        self.nodes[0].sendtoaddress(mSigObj, 1.2)
         self.generate(self.nodes[0], 1)
 
         oldBalance = self.nodes[1].getbalance()
@@ -597,7 +600,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.log.info("Test fundrawtxn with locked wallet and hardened derivation")
 
         df_wallet = self.nodes[1].get_wallet_rpc(self.default_wallet_name)
-        self.nodes[1].createwallet(wallet_name="locked_wallet")
+        self.nodes[1].createwallet(wallet_name="locked_wallet", descriptors=self.options.descriptors)
         wallet = self.nodes[1].get_wallet_rpc("locked_wallet")
         # This test is not meant to exercise fee estimation. Making sure all txs are sent at a consistent fee rate.
         wallet.settxfee(self.min_relay_tx_fee)
@@ -609,18 +612,19 @@ class RawTransactionsTest(BitcoinTestFramework):
         # Encrypt wallet and import descriptors
         wallet.encryptwallet("test")
 
-        with WalletUnlock(wallet, "test"):
-            wallet.importdescriptors([{
-                'desc': descsum_create('wpkh(tprv8ZgxMBicQKsPdYeeZbPSKd2KYLmeVKtcFA7kqCxDvDR13MQ6us8HopUR2wLcS2ZKPhLyKsqpDL2FtL73LMHcgoCL7DXsciA8eX8nbjCR2eG/0h/*h)'),
-                'timestamp': 'now',
-                'active': True
-            },
-            {
-                'desc': descsum_create('wpkh(tprv8ZgxMBicQKsPdYeeZbPSKd2KYLmeVKtcFA7kqCxDvDR13MQ6us8HopUR2wLcS2ZKPhLyKsqpDL2FtL73LMHcgoCL7DXsciA8eX8nbjCR2eG/1h/*h)'),
-                'timestamp': 'now',
-                'active': True,
-                'internal': True
-            }])
+        if self.options.descriptors:
+            with WalletUnlock(wallet, "test"):
+                wallet.importdescriptors([{
+                    'desc': descsum_create('wpkh(tprv8ZgxMBicQKsPdYeeZbPSKd2KYLmeVKtcFA7kqCxDvDR13MQ6us8HopUR2wLcS2ZKPhLyKsqpDL2FtL73LMHcgoCL7DXsciA8eX8nbjCR2eG/0h/*h)'),
+                    'timestamp': 'now',
+                    'active': True
+                },
+                {
+                    'desc': descsum_create('wpkh(tprv8ZgxMBicQKsPdYeeZbPSKd2KYLmeVKtcFA7kqCxDvDR13MQ6us8HopUR2wLcS2ZKPhLyKsqpDL2FtL73LMHcgoCL7DXsciA8eX8nbjCR2eG/1h/*h)'),
+                    'timestamp': 'now',
+                    'active': True,
+                    'internal': True
+                }])
 
         # Drain the keypool.
         wallet.getnewaddress()
@@ -757,7 +761,10 @@ class RawTransactionsTest(BitcoinTestFramework):
             "range": [0, 100],
             "watchonly": True,
         }]
-        wwatch.importdescriptors(desc_import)
+        if self.options.descriptors:
+            wwatch.importdescriptors(desc_import)
+        else:
+            wwatch.importmulti(desc_import)
 
         # Backward compatibility test (2nd params is includeWatching)
         result = wwatch.fundrawtransaction(rawtx, True)
@@ -1034,7 +1041,10 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         # Make a weird but signable script. sh(pkh()) descriptor accomplishes this
         desc = descsum_create("sh(pkh({}))".format(privkey))
-        res = self.nodes[0].importdescriptors([{"desc": desc, "timestamp": "now"}])
+        if self.options.descriptors:
+            res = self.nodes[0].importdescriptors([{"desc": desc, "timestamp": "now"}])
+        else:
+            res = self.nodes[0].importmulti([{"desc": desc, "timestamp": "now"}])
         assert res[0]["success"]
         addr = self.nodes[0].deriveaddresses(desc)[0]
         addr_info = self.nodes[0].getaddressinfo(addr)

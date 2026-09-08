@@ -64,13 +64,13 @@ void RPCNestedTests::rpcNestedTests()
     RPCConsole::RPCExecuteCommandLine(m_node, result, "getblock( getblock( getblock(getbestblockhash())[hash] )[hash], true)"); //4 level nesting with whitespace, filtering path and boolean parameter
 
     RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo");
-    QVERIFY(result.starts_with("{"));
+    QVERIFY(result.substr(0,1) == "{");
 
     RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo()");
-    QVERIFY(result.starts_with("{"));
+    QVERIFY(result.substr(0,1) == "{");
 
     RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo "); //whitespace at the end will be tolerated
-    QVERIFY(result.starts_with("{"));
+    QVERIFY(result.substr(0,1) == "{");
 
     RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo()[\"chain\"]"); //Quote path identifier are allowed, but look after a child containing the quotes in the key
     QVERIFY(result == "null");
@@ -85,6 +85,8 @@ void RPCNestedTests::rpcNestedTests()
     QVERIFY(result == "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b");
     QVERIFY(filtered == "getblock(getbestblockhash())[tx][0]");
 
+    RPCConsole::RPCParseCommandLine(nullptr, result, "importprivkey", false, &filtered);
+    QVERIFY(filtered == "importprivkey(…)");
     RPCConsole::RPCParseCommandLine(nullptr, result, "signmessagewithprivkey abc", false, &filtered);
     QVERIFY(filtered == "signmessagewithprivkey(…)");
     RPCConsole::RPCParseCommandLine(nullptr, result, "signmessagewithprivkey abc,def", false, &filtered);
@@ -97,6 +99,12 @@ void RPCNestedTests::rpcNestedTests()
     QVERIFY(filtered == "walletpassphrasechange(…)");
     RPCConsole::RPCParseCommandLine(nullptr, result, "help(encryptwallet(abc, def))", false, &filtered);
     QVERIFY(filtered == "help(encryptwallet(…))");
+    RPCConsole::RPCParseCommandLine(nullptr, result, "help(importprivkey())", false, &filtered);
+    QVERIFY(filtered == "help(importprivkey(…))");
+    RPCConsole::RPCParseCommandLine(nullptr, result, "help(importprivkey(help()))", false, &filtered);
+    QVERIFY(filtered == "help(importprivkey(…))");
+    RPCConsole::RPCParseCommandLine(nullptr, result, "help(importprivkey(abc), walletpassphrase(def))", false, &filtered);
+    QVERIFY(filtered == "help(importprivkey(…), walletpassphrase(…))");
 
     RPCConsole::RPCExecuteCommandLine(m_node, result, "rpcNestedTest");
     QVERIFY(result == "[]");

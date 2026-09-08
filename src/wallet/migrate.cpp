@@ -1,20 +1,15 @@
-// Copyright (c) 2024-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <compat/byteswap.h>
-#include <crypto/common.h>
+#include <crypto/common.h> // For ReadBE32
 #include <logging.h>
 #include <streams.h>
 #include <util/translation.h>
 #include <wallet/migrate.h>
 
-#include <array>
-#include <cstddef>
 #include <optional>
-#include <stdexcept>
 #include <variant>
-#include <vector>
 
 namespace wallet {
 // Magic bytes in both endianness's
@@ -704,7 +699,7 @@ void BerkeleyRODatabase::Open()
     }
 }
 
-std::unique_ptr<DatabaseBatch> BerkeleyRODatabase::MakeBatch()
+std::unique_ptr<DatabaseBatch> BerkeleyRODatabase::MakeBatch(bool flush_on_close)
 {
     return std::make_unique<BerkeleyROBatch>(*this);
 }
@@ -727,7 +722,7 @@ bool BerkeleyRODatabase::Backup(const std::string& dest) const
         LogPrintf("copied %s to %s\n", fs::PathToString(m_filepath), fs::PathToString(dst));
         return true;
     } catch (const fs::filesystem_error& e) {
-        LogWarning("error copying %s to %s - %s\n", fs::PathToString(m_filepath), fs::PathToString(dst), e.code().message());
+        LogPrintf("error copying %s to %s - %s\n", fs::PathToString(m_filepath), fs::PathToString(dst), fsbridge::get_filesystem_error_message(e));
         return false;
     }
 }

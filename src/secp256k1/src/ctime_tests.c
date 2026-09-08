@@ -5,7 +5,6 @@
  ***********************************************************************/
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "../include/secp256k1.h"
@@ -50,7 +49,7 @@ int main(void) {
     if (!SECP256K1_CHECKMEM_RUNNING()) {
         fprintf(stderr, "This test can only usefully be run inside valgrind because it was not compiled under msan.\n");
         fprintf(stderr, "Usage: libtool --mode=execute valgrind ./ctime_tests\n");
-        return EXIT_FAILURE;
+        return 1;
     }
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_DECLASSIFY);
     /** In theory, testing with a single secret input should be sufficient:
@@ -70,7 +69,7 @@ int main(void) {
     CHECK(ret);
 
     secp256k1_context_destroy(ctx);
-    return EXIT_SUCCESS;
+    return 0;
 }
 
 static void run_tests(secp256k1_context *ctx, unsigned char *key) {

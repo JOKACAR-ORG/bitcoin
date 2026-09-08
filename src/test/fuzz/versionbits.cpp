@@ -9,7 +9,6 @@
 #include <primitives/block.h>
 #include <util/chaintype.h>
 #include <versionbits.h>
-#include <versionbits_impl.h>
 
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
@@ -21,22 +20,47 @@
 #include <vector>
 
 namespace {
-class TestConditionChecker : public VersionBitsConditionChecker
+class TestConditionChecker : public AbstractThresholdConditionChecker
 {
 private:
     mutable ThresholdConditionCache m_cache;
+    const Consensus::Params dummy_params{};
 
 public:
-    TestConditionChecker(const Consensus::BIP9Deployment& dep) : VersionBitsConditionChecker{dep}
+    const int64_t m_begin;
+    const int64_t m_end;
+    const int m_period;
+    const int m_threshold;
+    const int m_min_activation_height;
+    const int m_bit;
+
+    TestConditionChecker(int64_t begin, int64_t end, int period, int threshold, int min_activation_height, int bit)
+        : m_begin{begin}, m_end{end}, m_period{period}, m_threshold{threshold}, m_min_activation_height{min_activation_height}, m_bit{bit}
     {
-        assert(dep.period > 0);
-        assert(dep.threshold <= dep.period);
-        assert(0 <= dep.bit && dep.bit < 32 && dep.bit < VERSIONBITS_NUM_BITS);
-        assert(0 <= dep.min_activation_height);
+        assert(m_period > 0);
+        assert(0 <= m_threshold && m_threshold <= m_period);
+        assert(0 <= m_bit && m_bit < 32 && m_bit < VERSIONBITS_NUM_BITS);
+        assert(0 <= m_min_activation_height);
     }
 
-    ThresholdState GetStateFor(const CBlockIndex* pindexPrev) const { return AbstractThresholdConditionChecker::GetStateFor(pindexPrev, m_cache); }
-    int GetStateSinceHeightFor(const CBlockIndex* pindexPrev) const { return AbstractThresholdConditionChecker::GetStateSinceHeightFor(pindexPrev, m_cache); }
+    bool Condition(const CBlockIndex* pindex, const Consensus::Params& params) const override { return Condition(pindex->nVersion); }
+    int64_t BeginTime(const Consensus::Params& params) const override { return m_begin; }
+    int64_t EndTime(const Consensus::Params& params) const override { return m_end; }
+    int Period(const Consensus::Params& params) const override { return m_period; }
+    int Threshold(const Consensus::Params& params) const override { return m_threshold; }
+    int MinActivationHeight(const Consensus::Params& params) const override { return m_min_activation_height; }
+
+    ThresholdState GetStateFor(const CBlockIndex* pindexPrev) const { return AbstractThresholdConditionChecker::GetStateFor(pindexPrev, dummy_params, m_cache); }
+    int GetStateSinceHeightFor(const CBlockIndex* pindexPrev) const { return AbstractThresholdConditionChecker::GetStateSinceHeightFor(pindexPrev, dummy_params, m_cache); }
+    BIP9Stats GetStateStatisticsFor(const CBlockIndex* pindex, std::vector<bool>* signals=nullptr) const { return AbstractThresholdConditionChecker::GetStateStatisticsFor(pindex, dummy_params, signals); }
+
+    bool Condition(int32_t version) const
+    {
+        uint32_t mask = (uint32_t{1}) << m_bit;
+        return (((version & VERSIONBITS_TOP_MASK) == VERSIONBITS_TOP_BITS) && (version & mask) != 0);
+    }
+
+    bool Condition(const CBlockIndex* pindex) const { return Condition(pindex->nVersion); }
 };
 
 /** Track blocks mined for test */
@@ -97,9 +121,12 @@ FUZZ_TARGET(versionbits, .init = initialize)
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
 
     // making period/max_periods larger slows these tests down significantly
-    const uint32_t period = 32;
+    const int period = 32;
     const size_t max_periods = 16;
     const size_t max_blocks = 2 * period * max_periods;
+
+    const int threshold = fuzzed_data_provider.ConsumeIntegralInRange(1, period);
+    assert(0 < threshold && threshold <= period); // must be able to both pass and fail threshold!
 
     // too many blocks at 10min each might cause uint32_t time to overflow if
     // block_start_time is at the end of the range above
@@ -110,56 +137,52 @@ FUZZ_TARGET(versionbits, .init = initialize)
     // what values for version will we use to signal / not signal?
     const int32_t ver_signal = fuzzed_data_provider.ConsumeIntegral<int32_t>();
     const int32_t ver_nosignal = fuzzed_data_provider.ConsumeIntegral<int32_t>();
-    if (ver_nosignal < 0) return; // negative values are uninteresting
 
-    // Now that we have chosen time and versions, setup to mine blocks
-    Blocks blocks(block_start_time, interval, ver_signal, ver_nosignal);
+    // select deployment parameters: bit, start time, timeout
+    const int bit = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, VERSIONBITS_NUM_BITS - 1);
 
-    const bool always_active_test = fuzzed_data_provider.ConsumeBool();
-    const bool never_active_test = !always_active_test && fuzzed_data_provider.ConsumeBool();
+    bool always_active_test = false;
+    bool never_active_test = false;
+    int64_t start_time;
+    int64_t timeout;
+    if (fuzzed_data_provider.ConsumeBool()) {
+        // pick the timestamp to switch based on a block
+        // note states will change *after* these blocks because mediantime lags
+        int start_block = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, period * (max_periods - 3));
+        int end_block = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, period * (max_periods - 3));
 
-    const Consensus::BIP9Deployment dep{[&]() {
-        Consensus::BIP9Deployment dep;
-        dep.period = period;
+        start_time = block_start_time + start_block * interval;
+        timeout = block_start_time + end_block * interval;
 
-        dep.threshold = fuzzed_data_provider.ConsumeIntegralInRange<uint32_t>(1, period);
-        assert(0 < dep.threshold && dep.threshold <= dep.period); // must be able to both pass and fail threshold!
-
-        // select deployment parameters: bit, start time, timeout
-        dep.bit = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, VERSIONBITS_NUM_BITS - 1);
-
-        if (always_active_test) {
-            dep.nStartTime = Consensus::BIP9Deployment::ALWAYS_ACTIVE;
-            dep.nTimeout = fuzzed_data_provider.ConsumeBool() ? Consensus::BIP9Deployment::NO_TIMEOUT : fuzzed_data_provider.ConsumeIntegral<int64_t>();
-        } else if (never_active_test) {
-            dep.nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
-            dep.nTimeout = fuzzed_data_provider.ConsumeBool() ? Consensus::BIP9Deployment::NO_TIMEOUT : fuzzed_data_provider.ConsumeIntegral<int64_t>();
+        // allow for times to not exactly match a block
+        if (fuzzed_data_provider.ConsumeBool()) start_time += interval / 2;
+        if (fuzzed_data_provider.ConsumeBool()) timeout += interval / 2;
+    } else {
+        if (fuzzed_data_provider.ConsumeBool()) {
+            start_time = Consensus::BIP9Deployment::ALWAYS_ACTIVE;
+            always_active_test = true;
         } else {
-            // pick the timestamp to switch based on a block
-            // note states will change *after* these blocks because mediantime lags
-            int start_block = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, period * (max_periods - 3));
-            int end_block = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, period * (max_periods - 3));
-
-            dep.nStartTime = block_start_time + start_block * interval;
-            dep.nTimeout = block_start_time + end_block * interval;
-
-            // allow for times to not exactly match a block
-            if (fuzzed_data_provider.ConsumeBool()) dep.nStartTime += interval / 2;
-            if (fuzzed_data_provider.ConsumeBool()) dep.nTimeout += interval / 2;
+            start_time = Consensus::BIP9Deployment::NEVER_ACTIVE;
+            never_active_test = true;
         }
-        dep.min_activation_height = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, period * max_periods);
-        return dep;
-    }()};
-    TestConditionChecker checker(dep);
+        timeout = fuzzed_data_provider.ConsumeBool() ? Consensus::BIP9Deployment::NO_TIMEOUT : fuzzed_data_provider.ConsumeIntegral<int64_t>();
+    }
+    int min_activation = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, period * max_periods);
+
+    TestConditionChecker checker(start_time, timeout, period, threshold, min_activation, bit);
 
     // Early exit if the versions don't signal sensibly for the deployment
     if (!checker.Condition(ver_signal)) return;
     if (checker.Condition(ver_nosignal)) return;
+    if (ver_nosignal < 0) return;
 
     // TOP_BITS should ensure version will be positive and meet min
     // version requirement
     assert(ver_signal > 0);
     assert(ver_signal >= VERSIONBITS_LAST_OLD_BLOCK_VERSION);
+
+    // Now that we have chosen time and versions, setup to mine blocks
+    Blocks blocks(block_start_time, interval, ver_signal, ver_nosignal);
 
     /* Strategy:
      *  * we will mine a final period worth of blocks, with
@@ -180,7 +203,7 @@ FUZZ_TARGET(versionbits, .init = initialize)
     while (fuzzed_data_provider.remaining_bytes() > 0) { // early exit; no need for LIMITED_WHILE
         // all blocks in these periods either do or don't signal
         bool signal = fuzzed_data_provider.ConsumeBool();
-        for (uint32_t b = 0; b < period; ++b) {
+        for (int b = 0; b < period; ++b) {
             blocks.mine_block(signal);
         }
 
@@ -192,7 +215,7 @@ FUZZ_TARGET(versionbits, .init = initialize)
     // now we mine the final period and check that everything looks sane
 
     // count the number of signalling blocks
-    uint32_t blocks_sig = 0;
+    int blocks_sig = 0;
 
     // get the info for the first block of the period
     CBlockIndex* prev = blocks.tip();
@@ -202,23 +225,23 @@ FUZZ_TARGET(versionbits, .init = initialize)
     // get statistics from end of previous period, then reset
     BIP9Stats last_stats;
     last_stats.period = period;
-    last_stats.threshold = dep.threshold;
+    last_stats.threshold = threshold;
     last_stats.count = last_stats.elapsed = 0;
-    last_stats.possible = (period >= dep.threshold);
+    last_stats.possible = (period >= threshold);
     std::vector<bool> last_signals{};
 
     int prev_next_height = (prev == nullptr ? 0 : prev->nHeight + 1);
     assert(exp_since <= prev_next_height);
 
     // mine (period-1) blocks and check state
-    for (uint32_t b = 1; b < period; ++b) {
+    for (int b = 1; b < period; ++b) {
         const bool signal = (signalling_mask >> (b % 32)) & 1;
         if (signal) ++blocks_sig;
 
         CBlockIndex* current_block = blocks.mine_block(signal);
 
         // verify that signalling attempt was interpreted correctly
-        assert(checker.Condition(current_block->nVersion) == signal);
+        assert(checker.Condition(current_block) == signal);
 
         // state and since don't change within the period
         const ThresholdState state = checker.GetStateFor(current_block);
@@ -235,10 +258,10 @@ FUZZ_TARGET(versionbits, .init = initialize)
                && stats.possible == stats_no_signals.possible);
 
         assert(stats.period == period);
-        assert(stats.threshold == dep.threshold);
+        assert(stats.threshold == threshold);
         assert(stats.elapsed == b);
         assert(stats.count == last_stats.count + (signal ? 1 : 0));
-        assert(stats.possible == (stats.count + period >= stats.elapsed + dep.threshold));
+        assert(stats.possible == (stats.count + period >= stats.elapsed + threshold));
         last_stats = stats;
 
         assert(signals.size() == last_signals.size() + 1);
@@ -249,21 +272,21 @@ FUZZ_TARGET(versionbits, .init = initialize)
 
     if (exp_state == ThresholdState::STARTED) {
         // double check that stats.possible is sane
-        if (blocks_sig >= dep.threshold - 1) assert(last_stats.possible);
+        if (blocks_sig >= threshold - 1) assert(last_stats.possible);
     }
 
     // mine the final block
     bool signal = (signalling_mask >> (period % 32)) & 1;
     if (signal) ++blocks_sig;
     CBlockIndex* current_block = blocks.mine_block(signal);
-    assert(checker.Condition(current_block->nVersion) == signal);
+    assert(checker.Condition(current_block) == signal);
 
     const BIP9Stats stats = checker.GetStateStatisticsFor(current_block);
     assert(stats.period == period);
-    assert(stats.threshold == dep.threshold);
+    assert(stats.threshold == threshold);
     assert(stats.elapsed == period);
     assert(stats.count == blocks_sig);
-    assert(stats.possible == (stats.count + period >= stats.elapsed + dep.threshold));
+    assert(stats.possible == (stats.count + period >= stats.elapsed + threshold));
 
     // More interesting is whether the state changed.
     const ThresholdState state = checker.GetStateFor(current_block);
@@ -283,33 +306,33 @@ FUZZ_TARGET(versionbits, .init = initialize)
     case ThresholdState::DEFINED:
         assert(since == 0);
         assert(exp_state == ThresholdState::DEFINED);
-        assert(current_block->GetMedianTimePast() < dep.nStartTime);
+        assert(current_block->GetMedianTimePast() < checker.m_begin);
         break;
     case ThresholdState::STARTED:
-        assert(current_block->GetMedianTimePast() >= dep.nStartTime);
+        assert(current_block->GetMedianTimePast() >= checker.m_begin);
         if (exp_state == ThresholdState::STARTED) {
-            assert(blocks_sig < dep.threshold);
-            assert(current_block->GetMedianTimePast() < dep.nTimeout);
+            assert(blocks_sig < threshold);
+            assert(current_block->GetMedianTimePast() < checker.m_end);
         } else {
             assert(exp_state == ThresholdState::DEFINED);
         }
         break;
     case ThresholdState::LOCKED_IN:
         if (exp_state == ThresholdState::LOCKED_IN) {
-            assert(current_block->nHeight + 1 < dep.min_activation_height);
+            assert(current_block->nHeight + 1 < min_activation);
         } else {
             assert(exp_state == ThresholdState::STARTED);
-            assert(blocks_sig >= dep.threshold);
+            assert(blocks_sig >= threshold);
         }
         break;
     case ThresholdState::ACTIVE:
-        assert(always_active_test || dep.min_activation_height <= current_block->nHeight + 1);
+        assert(always_active_test || min_activation <= current_block->nHeight + 1);
         assert(exp_state == ThresholdState::ACTIVE || exp_state == ThresholdState::LOCKED_IN);
         break;
     case ThresholdState::FAILED:
-        assert(never_active_test || current_block->GetMedianTimePast() >= dep.nTimeout);
+        assert(never_active_test || current_block->GetMedianTimePast() >= checker.m_end);
         if (exp_state == ThresholdState::STARTED) {
-            assert(blocks_sig < dep.threshold);
+            assert(blocks_sig < threshold);
         } else {
             assert(exp_state == ThresholdState::FAILED);
         }

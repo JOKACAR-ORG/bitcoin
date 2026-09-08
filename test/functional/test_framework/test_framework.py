@@ -7,14 +7,12 @@
 import configparser
 from enum import Enum
 import argparse
-from datetime import datetime, timezone
 import logging
 import os
 import platform
 import pdb
 import random
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -37,7 +35,6 @@ from .util import (
     initialize_datadir,
     p2p_port,
     wait_until_helper_internal,
-    wallet_importprivkey,
 )
 
 
@@ -75,37 +72,33 @@ class Binaries:
         self.paths = paths
         self.bin_dir = bin_dir
 
-    def node_argv(self):
+    def daemon_argv(self):
         "Return argv array that should be used to invoke bitcoind"
-        return self._argv("node", self.paths.bitcoind)
+        return self._argv(self.paths.bitcoind)
 
     def rpc_argv(self):
         "Return argv array that should be used to invoke bitcoin-cli"
-        # Add -nonamed because "bitcoin rpc" enables -named by default, but bitcoin-cli doesn't
-        return self._argv("rpc", self.paths.bitcoincli) + ["-nonamed"]
+        return self._argv(self.paths.bitcoincli)
 
     def util_argv(self):
         "Return argv array that should be used to invoke bitcoin-util"
-        return self._argv("util", self.paths.bitcoinutil)
+        return self._argv(self.paths.bitcoinutil)
 
     def wallet_argv(self):
         "Return argv array that should be used to invoke bitcoin-wallet"
-        return self._argv("wallet", self.paths.bitcoinwallet)
+        return self._argv(self.paths.bitcoinwallet)
 
     def chainstate_argv(self):
         "Return argv array that should be used to invoke bitcoin-chainstate"
-        return self._argv("chainstate", self.paths.bitcoinchainstate)
+        return self._argv(self.paths.bitcoinchainstate)
 
-    def _argv(self, command, bin_path):
-        """Return argv array that should be used to invoke the command. It
-        either uses the bitcoin wrapper executable (if BITCOIN_CMD is set), or
-        the direct binary path (bitcoind, etc). When bin_dir is set (by tests
-        calling binaries from previous releases) it always uses the direct
-        path."""
+    def _argv(self, bin_path):
+        """Return argv array that should be used to invoke the command.
+        Normally this will return binary paths directly from the paths object,
+        but when bin_dir is set (by tests calling binaries from previous
+        releases) it will return paths relative to bin_dir instead."""
         if self.bin_dir is not None:
             return [os.path.join(self.bin_dir, os.path.basename(bin_path))]
-        elif self.paths.bitcoin_cmd is not None:
-            return self.paths.bitcoin_cmd + [command]
         else:
             return [bin_path]
 
@@ -158,7 +151,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.supports_cli = True
         self.bind_to_localhost_only = True
         self.parse_args(test_file)
-        self.default_wallet_name = "default_wallet"
+        self.default_wallet_name = "default_wallet" if self.options.descriptors else ""
         self.wallet_data_filename = "wallet.dat"
         # Optional list of wallet names that can be set in set_test_params to
         # create and import keys to. If unset, default is len(nodes) *
@@ -167,9 +160,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         # are not imported.
         self.wallet_names = None
         # By default the wallet is not required. Set to true by skip_if_no_wallet().
-        # Can also be set to None to indicate that the wallet will be used if available.
-        # When False or None, we ignore wallet_names in setup_nodes().
-        self.uses_wallet = False
+        # When False, we ignore wallet_names regardless of what it is.
+        self._requires_wallet = False
         # Disable ThreadOpenConnections by default, so that adding entries to
         # addrman will not result in automatic connections to them.
         self.disable_autoconnect = True
@@ -268,7 +260,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         parser.add_argument("-f", "--fff", help="a dummy argument to fool ipython", default="1")
         self.options = parser.parse_args()
         if self.options.timeout_factor == 0:
-            self.options.timeout_factor = 999
+            self.options.timeout_factor = 99999
         self.options.timeout_factor = self.options.timeout_factor or (4 if self.options.valgrind else 1)
         self.options.previous_releases_path = previous_releases_path
 
@@ -278,6 +270,20 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.binary_paths = self.get_binary_paths()
         if self.options.v1transport:
             self.options.v2transport=False
+
+        if "descriptors" not in self.options:
+            # Wallet is not required by the test at all and the value of self.options.descriptors won't matter.
+            # It still needs to exist and be None in order for tests to work however.
+            # So set it to None to force -disablewallet, because the wallet is not needed.
+            self.options.descriptors = None
+        elif self.options.descriptors is None:
+            if self.is_wallet_compiled():
+                self.options.descriptors = True
+            else:
+                # Tests requiring a wallet will be skipped and the value of self.options.descriptors won't matter
+                # It still needs to exist and be None in order for tests to work however.
+                # So set it to None, which will also set -disablewallet.
+                self.options.descriptors = None
 
         PortSeed.n = self.options.port_seed
 
@@ -299,9 +305,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                 binary + self.config["environment"]["EXEEXT"],
             )
             setattr(paths, attribute_name, os.getenv(env_variable_name, default=default_filename))
-        # BITCOIN_CMD environment variable can be specified to invoke bitcoin
-        # wrapper binary instead of other executables.
-        paths.bitcoin_cmd = shlex.split(os.getenv("BITCOIN_CMD", "")) or None
         return paths
 
     def get_binaries(self, bin_dir=None):
@@ -469,7 +472,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         """Override this method to customize test node setup"""
         self.add_nodes(self.num_nodes, self.extra_args)
         self.start_nodes()
-        if self.uses_wallet:
+        if self._requires_wallet:
             self.import_deterministic_coinbase_privkeys()
         if not self.setup_clean_chain:
             for n in self.nodes:
@@ -494,14 +497,33 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         if wallet_name is not False:
             n = self.nodes[node]
             if wallet_name is not None:
-                n.createwallet(wallet_name=wallet_name, load_on_startup=True)
-            wallet_importprivkey(n.get_wallet_rpc(wallet_name), n.get_deterministic_priv_key().key, 0, label="coinbase")
+                n.createwallet(wallet_name=wallet_name, descriptors=self.options.descriptors, load_on_startup=True)
+            n.importprivkey(privkey=n.get_deterministic_priv_key().key, label='coinbase', rescan=True)
+
+    # Only enables wallet support when the module is available
+    def enable_wallet_if_possible(self):
+        self._requires_wallet = self.is_wallet_compiled()
 
     def run_test(self):
         """Tests must override this method to define test logic"""
         raise NotImplementedError
 
     # Public helper methods. These can be accessed by the subclass test scripts.
+
+    def add_wallet_options(self, parser, *, descriptors=True, legacy=True):
+        kwargs = {}
+        if descriptors + legacy == 1:
+            # If only one type can be chosen, set it as default
+            kwargs["default"] = descriptors
+        group = parser.add_mutually_exclusive_group(
+            # If only one type is allowed, require it to be set in test_runner.py
+            required=os.getenv("REQUIRE_WALLET_TYPE_SET") == "1" and "default" in kwargs)
+        if descriptors:
+            group.add_argument("--descriptors", action='store_const', const=True, **kwargs,
+                               help="Run test using a descriptor wallet", dest='descriptors')
+        if legacy:
+            group.add_argument("--legacy-wallet", action='store_const', const=False, **kwargs,
+                               help="Run test using legacy wallets", dest='descriptors')
 
     def add_nodes(self, num_nodes: int, extra_args=None, *, rpchost=None, versions=None):
         """Instantiate TestNode objects.
@@ -547,7 +569,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         bins_missing = False
         for bin_path in (argv[0] for bin_dir in bin_dirs
                                  for binaries in (self.get_binaries(bin_dir),)
-                                 for argv in (binaries.node_argv(), binaries.rpc_argv())):
+                                 for argv in (binaries.daemon_argv(), binaries.rpc_argv())):
             if shutil.which(bin_path) is None:
                 self.log.error(f"Binary not found: {bin_path}")
                 bins_missing = True
@@ -576,8 +598,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                 use_cli=self.options.usecli,
                 start_perf=self.options.perf,
                 use_valgrind=self.options.valgrind,
+                descriptors=self.options.descriptors,
                 v2transport=self.options.v2transport,
-                uses_wallet=self.uses_wallet,
             )
             self.nodes.append(test_node_i)
             if not test_node_i.version_is_at_least(170000):
@@ -838,16 +860,9 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         # User can provide log level as a number or string (eg DEBUG). loglevel was caught as a string, so try to convert it to an int
         ll = int(self.options.loglevel) if self.options.loglevel.isdigit() else self.options.loglevel.upper()
         ch.setLevel(ll)
-
         # Format logs the same as bitcoind's debug.log with microprecision (so log files can be concatenated and sorted)
-        class MicrosecondFormatter(logging.Formatter):
-            def formatTime(self, record, _=None):
-                dt = datetime.fromtimestamp(record.created, timezone.utc)
-                return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')
-
-        formatter = MicrosecondFormatter(
-            fmt='%(asctime)sZ %(name)s (%(levelname)s): %(message)s',
-        )
+        formatter = logging.Formatter(fmt='%(asctime)s.%(msecs)03d000Z %(name)s (%(levelname)s): %(message)s', datefmt='%Y-%m-%dT%H:%M:%S')
+        formatter.converter = time.gmtime
         fh.setFormatter(formatter)
         ch.setFormatter(formatter)
         # add the handlers to the logger
@@ -888,7 +903,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                     binaries=self.get_binaries(),
                     coverage_dir=None,
                     cwd=self.options.tmpdir,
-                    uses_wallet=self.uses_wallet,
+                    descriptors=self.options.descriptors,
                 ))
             self.start_node(CACHE_NODE_ID)
             cache_node = self.nodes[CACHE_NODE_ID]
@@ -991,9 +1006,16 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def skip_if_no_wallet(self):
         """Skip the running test if wallet has not been compiled."""
-        self.uses_wallet = True
+        self._requires_wallet = True
         if not self.is_wallet_compiled():
             raise SkipTest("wallet has not been compiled.")
+        if not self.options.descriptors:
+            self.skip_if_no_bdb()
+
+    def skip_if_no_bdb(self):
+        """Skip the running test if BDB has not been compiled."""
+        if not self.is_bdb_compiled():
+            raise SkipTest("BDB has not been compiled.")
 
     def skip_if_no_wallet_tool(self):
         """Skip the running test if bitcoin-wallet has not been compiled."""
@@ -1033,11 +1055,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         if not self.is_external_signer_compiled():
             raise SkipTest("external signer support has not been compiled.")
 
-    def skip_if_running_under_valgrind(self):
-        """Skip the running test if Valgrind is being used."""
-        if self.options.valgrind:
-            raise SkipTest("This test is not compatible with Valgrind.")
-
     def is_cli_compiled(self):
         """Checks whether bitcoin-cli was compiled."""
         return self.config["components"].getboolean("ENABLE_CLI")
@@ -1049,6 +1066,14 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
     def is_wallet_compiled(self):
         """Checks whether the wallet module was compiled."""
         return self.config["components"].getboolean("ENABLE_WALLET")
+
+    def is_specified_wallet_compiled(self):
+        """Checks whether wallet support for the specified type
+           (legacy or descriptor wallet) was compiled."""
+        if self.options.descriptors:
+            return self.is_wallet_compiled()
+        else:
+            return self.is_bdb_compiled()
 
     def is_wallet_tool_compiled(self):
         """Checks whether bitcoin-wallet was compiled."""
@@ -1069,6 +1094,10 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
     def is_usdt_compiled(self):
         """Checks whether the USDT tracepoints were compiled."""
         return self.config["components"].getboolean("ENABLE_USDT_TRACEPOINTS")
+
+    def is_bdb_compiled(self):
+        """Checks whether the wallet module was compiled with BDB support."""
+        return self.config["components"].getboolean("USE_BDB")
 
     def has_blockfile(self, node, filenum: str):
         return (node.blocks_path/ f"blk{filenum}.dat").is_file()

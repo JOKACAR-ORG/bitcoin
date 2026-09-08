@@ -6,6 +6,7 @@
              (gnu packages commencement)
              (gnu packages compression)
              (gnu packages cross-base)
+             (gnu packages file)
              (gnu packages gawk)
              (gnu packages gcc)
              ((gnu packages installers) #:select (nsis-x86_64))
@@ -530,6 +531,7 @@ inspecting signatures in Mach-O binaries.")
         which
         coreutils-minimal
         ;; File(system) inspection
+        file
         grep
         diffutils
         findutils

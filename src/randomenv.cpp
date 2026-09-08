@@ -38,18 +38,18 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 #endif
-#ifdef HAVE_IFADDRS
+#if HAVE_DECL_GETIFADDRS && HAVE_DECL_FREEIFADDRS
 #include <ifaddrs.h>
 #endif
 #ifdef HAVE_SYSCTL
 #include <sys/sysctl.h>
-#if __has_include(<vm/vm_param.h>)
+#ifdef HAVE_VM_VM_PARAM_H
 #include <vm/vm_param.h>
 #endif
-#if __has_include(<sys/resources.h>)
+#ifdef HAVE_SYS_RESOURCES_H
 #include <sys/resources.h>
 #endif
-#if __has_include(<sys/vmmeter.h>)
+#ifdef HAVE_SYS_VMMETER_H
 #include <sys/vmmeter.h>
 #endif
 #endif
@@ -330,7 +330,7 @@ void RandAddStaticEnv(CSHA512& hasher)
     }
 #endif
 
-#ifdef HAVE_IFADDRS
+#if HAVE_DECL_GETIFADDRS && HAVE_DECL_FREEIFADDRS
     // Network interfaces
     struct ifaddrs *ifad = nullptr;
     getifaddrs(&ifad);

@@ -206,7 +206,6 @@ if(ENABLE_WALLET)
       wallet/wallettool.cpp
     )
     add_windows_resources(bitcoin-wallet bitcoin-wallet-res.rc)
-    add_windows_application_manifest(bitcoin-wallet)
     target_link_libraries(bitcoin-wallet
       core_interface
       bitcoin_wallet
@@ -332,14 +331,6 @@ target_link_libraries(bitcoin_node
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
 
-# Bitcoin wrapper executable that can call other executables.
-if(BUILD_BITCOIN_BIN)
-  add_executable(bitcoin bitcoin.cpp)
-  add_windows_resources(bitcoin bitcoin-res.rc)
-  add_windows_application_manifest(bitcoin)
-  target_link_libraries(bitcoin core_interface bitcoin_util)
-  install_binary_component(bitcoin)
-endif()
 
 # Bitcoin Core bitcoind.
 if(BUILD_DAEMON)
@@ -348,7 +339,6 @@ if(BUILD_DAEMON)
     init/bitcoind.cpp
   )
   add_windows_resources(bitcoind bitcoind-res.rc)
-  add_windows_application_manifest(bitcoind)
   target_link_libraries(bitcoind
     core_interface
     bitcoin_node
@@ -402,7 +392,6 @@ target_link_libraries(bitcoin_cli
 if(BUILD_CLI)
   add_executable(bitcoin-cli bitcoin-cli.cpp)
   add_windows_resources(bitcoin-cli bitcoin-cli-res.rc)
-  add_windows_application_manifest(bitcoin-cli)
   target_link_libraries(bitcoin-cli
     core_interface
     bitcoin_cli
@@ -418,7 +407,6 @@ endif()
 if(BUILD_TX)
   add_executable(bitcoin-tx bitcoin-tx.cpp)
   add_windows_resources(bitcoin-tx bitcoin-tx-res.rc)
-  add_windows_application_manifest(bitcoin-tx)
   target_link_libraries(bitcoin-tx
     core_interface
     bitcoin_common
@@ -432,7 +420,6 @@ endif()
 if(BUILD_UTIL)
   add_executable(bitcoin-util bitcoin-util.cpp)
   add_windows_resources(bitcoin-util bitcoin-util-res.rc)
-  add_windows_application_manifest(bitcoin-util)
   target_link_libraries(bitcoin-util
     core_interface
     bitcoin_common

@@ -57,6 +57,13 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
         hlayout->addSpacing(23);
     }
 
+    watchOnlyWidget = new QComboBox(this);
+    watchOnlyWidget->setFixedWidth(24);
+    watchOnlyWidget->addItem("", TransactionFilterProxy::WatchOnlyFilter_All);
+    watchOnlyWidget->addItem(platformStyle->SingleColorIcon(":/icons/eye_plus"), "", TransactionFilterProxy::WatchOnlyFilter_Yes);
+    watchOnlyWidget->addItem(platformStyle->SingleColorIcon(":/icons/eye_minus"), "", TransactionFilterProxy::WatchOnlyFilter_No);
+    hlayout->addWidget(watchOnlyWidget);
+
     dateWidget = new QComboBox(this);
     if (platformStyle->getUseExtraSpacing()) {
         dateWidget->setFixedWidth(121);
@@ -146,8 +153,9 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     transactionView->verticalHeader()->hide();
 
     QSettings settings;
-    if (!transactionView->horizontalHeader()->restoreState(settings.value("TransactionViewHeaderState-2025").toByteArray())) {
+    if (!transactionView->horizontalHeader()->restoreState(settings.value("TransactionViewHeaderState").toByteArray())) {
         transactionView->setColumnWidth(TransactionTableModel::Status, STATUS_COLUMN_WIDTH);
+        transactionView->setColumnWidth(TransactionTableModel::Watchonly, WATCHONLY_COLUMN_WIDTH);
         transactionView->setColumnWidth(TransactionTableModel::Date, DATE_COLUMN_WIDTH);
         transactionView->setColumnWidth(TransactionTableModel::Type, TYPE_COLUMN_WIDTH);
         transactionView->setColumnWidth(TransactionTableModel::Amount, AMOUNT_MINIMUM_COLUMN_WIDTH);
@@ -173,6 +181,7 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
 
     connect(dateWidget, qOverload<int>(&QComboBox::activated), this, &TransactionView::chooseDate);
     connect(typeWidget, qOverload<int>(&QComboBox::activated), this, &TransactionView::chooseType);
+    connect(watchOnlyWidget, qOverload<int>(&QComboBox::activated), this, &TransactionView::chooseWatchonly);
     connect(amountWidget, &QLineEdit::textChanged, amount_typing_delay, qOverload<>(&QTimer::start));
     connect(amount_typing_delay, &QTimer::timeout, this, &TransactionView::changedAmount);
     connect(search_widget, &QLineEdit::textChanged, prefix_typing_delay, qOverload<>(&QTimer::start));
@@ -184,7 +193,7 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     // Double-clicking on a transaction on the transaction history page shows details
     connect(this, &TransactionView::doubleClicked, this, &TransactionView::showDetails);
     // Highlight transaction after fee bump
-    connect(this, &TransactionView::bumpedFee, [this](const Txid& txid) {
+    connect(this, &TransactionView::bumpedFee, [this](const uint256& txid) {
       focusTransaction(txid);
     });
 }
@@ -192,8 +201,7 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
 TransactionView::~TransactionView()
 {
     QSettings settings;
-    // Rename this cache when adding or removing columns.
-    settings.setValue("TransactionViewHeaderState-2025", transactionView->horizontalHeader()->saveState());
+    settings.setValue("TransactionViewHeaderState", transactionView->horizontalHeader()->saveState());
 }
 
 void TransactionView::setModel(WalletModel *_model)
@@ -232,11 +240,26 @@ void TransactionView::setModel(WalletModel *_model)
                 }
             }
         }
+
+        // show/hide column Watch-only
+        updateWatchOnlyColumn(_model->wallet().haveWatchOnly());
+
+        // Watch-only signal
+        connect(_model, &WalletModel::notifyWatchonlyChanged, this, &TransactionView::updateWatchOnlyColumn);
     }
 }
 
 void TransactionView::changeEvent(QEvent* e)
 {
+    if (e->type() == QEvent::PaletteChange) {
+        watchOnlyWidget->setItemIcon(
+            TransactionFilterProxy::WatchOnlyFilter_Yes,
+            m_platform_style->SingleColorIcon(QStringLiteral(":/icons/eye_plus")));
+        watchOnlyWidget->setItemIcon(
+            TransactionFilterProxy::WatchOnlyFilter_No,
+            m_platform_style->SingleColorIcon(QStringLiteral(":/icons/eye_minus")));
+    }
+
     QWidget::changeEvent(e);
 }
 
@@ -295,6 +318,14 @@ void TransactionView::chooseType(int idx)
         typeWidget->itemData(idx).toInt());
 }
 
+void TransactionView::chooseWatchonly(int idx)
+{
+    if(!transactionProxyModel)
+        return;
+    transactionProxyModel->setWatchOnlyFilter(
+        static_cast<TransactionFilterProxy::WatchOnlyFilter>(watchOnlyWidget->itemData(idx).toInt()));
+}
+
 void TransactionView::changedSearch()
 {
     if(!transactionProxyModel)
@@ -337,6 +368,8 @@ void TransactionView::exportClicked()
     // name, column, role
     writer.setModel(transactionProxyModel);
     writer.addColumn(tr("Confirmed"), 0, TransactionTableModel::ConfirmedRole);
+    if (model->wallet().haveWatchOnly())
+        writer.addColumn(tr("Watch-only"), TransactionTableModel::Watchonly);
     writer.addColumn(tr("Date"), 0, TransactionTableModel::DateRole);
     writer.addColumn(tr("Type"), TransactionTableModel::Type, Qt::EditRole);
     writer.addColumn(tr("Label"), 0, TransactionTableModel::LabelRole);
@@ -403,7 +436,7 @@ void TransactionView::bumpFee([[maybe_unused]] bool checked)
     Txid hash = Txid::FromHex(hashQStr.toStdString()).value();
 
     // Bump tx fee over the walletModel
-    Txid newHash;
+    uint256 newHash;
     if (model->bumpFee(hash, newHash)) {
         // Update the table
         transactionView->selectionModel()->clearSelection();
@@ -571,7 +604,7 @@ void TransactionView::focusTransaction(const QModelIndex &idx)
     transactionView->setFocus();
 }
 
-void TransactionView::focusTransaction(const Txid& txid)
+void TransactionView::focusTransaction(const uint256& txid)
 {
     if (!transactionProxyModel)
         return;
@@ -615,6 +648,13 @@ bool TransactionView::eventFilter(QObject *obj, QEvent *event)
         }
     }
     return QWidget::eventFilter(obj, event);
+}
+
+// show/hide column Watch-only
+void TransactionView::updateWatchOnlyColumn(bool fHaveWatchOnly)
+{
+    watchOnlyWidget->setVisible(fHaveWatchOnly);
+    transactionView->setColumnHidden(TransactionTableModel::Watchonly, !fHaveWatchOnly);
 }
 
 void TransactionView::closeOpenedDialogs()

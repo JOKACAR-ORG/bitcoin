@@ -18,8 +18,11 @@ class TestShell:
     start a single TestShell at a time."""
 
     class __TestShell(BitcoinTestFramework):
+        def add_options(self, parser):
+            self.add_wallet_options(parser)
+
         def set_test_params(self):
-            self.uses_wallet = None
+            pass
 
         def run_test(self):
             pass
